@@ -3,4 +3,4 @@
 	url = https://github.com/sourcifyeth/h5ai-nginx
 [submodule "docker/sourcify-monitoring"]
 	path = docker/sourcify-monitoring
-	url = git@github.com:sourcifyeth/sourcify-monitoring.git
+	url = https://github.com/sourcifyeth/sourcify-monitoring
