@@ -10,7 +10,7 @@ ui/dist/
 ui/.cache/
 source-verify.dab
 dist/
-**/.env
+environments/.env
 **/.env-backup
 **/*.key
 stats**
