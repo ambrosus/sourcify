@@ -2,7 +2,7 @@ FROM node:16-alpine
 
 WORKDIR /etc/sourcify
 
-ADD . ./
+COPY . .
 
 COPY configs/chains/* services/core/src/
 COPY configs/.env environments/.env
