@@ -7,4 +7,4 @@ COPY . .
 COPY configs/chains/* services/core/src/
 COPY configs/.env environments/.env
 
-RUN npx lerna bootstrap && npx lerna run build
+RUN npx lerna bootstrap
