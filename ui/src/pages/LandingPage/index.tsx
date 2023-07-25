@@ -1,7 +1,7 @@
 // AnimateOnScroll
 import AOS from "aos";
 import "aos/dist/aos.css";
-import { useRef, useState } from "react";
+import { useContext, useRef, useState, RefObject } from "react";
 import { BsChevronCompactDown } from "react-icons/bs";
 import { HiCheckCircle } from "react-icons/hi";
 import { Link } from "react-router-dom";
@@ -36,6 +36,8 @@ import CustomCarousel from "./CustomCarousel";
 import metadata from "./metadata.json";
 import PoweredBySourcify from "./PoweredBySourcify";
 import ToolsPlugin from "./ToolsPlugin";
+import { Context } from "../../Context";
+
 AOS.init({
   duration: 800,
   once: true,
@@ -86,8 +88,17 @@ const A = ({ href, children }: FooterItemProps) => (
 const LandingPage = () => {
   const [showMoreReadResources, setShowMoreReadResources] = useState(false);
   const [showMoreWatchResources, setShowMoreWatchResources] = useState(false);
+  const { sourcifyChains } = useContext(Context);
 
   const aboutRef = useRef<HTMLElement>(null);
+
+  const scrollIntoView = (ref: RefObject<HTMLElement>) => {
+    const el = ref?.current;
+    if (!el) {
+      return;
+    }
+    el.scrollIntoView({ behavior: "smooth" });
+  };
   return (
     <div>
       <div className="h-screen flex flex-col  px-8 md:px-12 lg:px-24 bg-gray-100 ">
@@ -190,9 +201,12 @@ const LandingPage = () => {
             </div>
           </div>
         </section>
-        <a className="my-4 flex justify-center" href="/#about">
+        <button
+          className="my-4 flex justify-center"
+          onClick={() => scrollIntoView(aboutRef)}
+        >
           <BsChevronCompactDown className="inline text-4xl animate-bounce text-gray-500" />
-        </a>
+        </button>
       </div>
 
       {/* About section */}
@@ -287,6 +301,14 @@ const LandingPage = () => {
         </h1>
         <div className="mt-8 text-lg">
           <p>Sourcify is multi-chain and works on all EVM based networks.</p>
+          {sourcifyChains.length > 0 && (
+            <p>
+              {" "}
+              Currently we support{" "}
+              {sourcifyChains.filter((c) => c.supported).length} different
+              chains{" "}
+            </p>
+          )}
         </div>
         <ReactTooltip effect="solid" />
         <div className="flex flex-row w-full justify-center py-16 logos-container flex-wrap">
@@ -354,7 +376,7 @@ const LandingPage = () => {
             // className="underline decoration-lightCoral-500 decoration-2 font-semibold text-ceruleanBlue-500"
             className="link-underline font-semibold text-ceruleanBlue-500"
           >
-            See all networks
+            See all {sourcifyChains.length > 0 && sourcifyChains.length} chains
           </a>
         </div>
       </section>
@@ -409,12 +431,10 @@ const LandingPage = () => {
         <h1 className="text-3xl text-ceruleanBlue-500 font-bold">Resources</h1>
         <div className="flex flex-col items-center mt-8">
           <iframe
-            className="sm:w-full sm:h-auto md:w-[48rem] md:h-[27rem]"
-            src="https://www.youtube.com/embed/cgKrRt6B0Ps"
-            title="Kaan Uzdogan : Human-friendly contract interactions with Sourcify verification"
-            frameBorder="0"
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-            allowFullScreen
+            className="sm:w-[560px] sm:h-[315px] w-[280px] h-[157.5px]"
+            src="https://www.youtube.com/embed/Ggm82pnalCI"
+            title="YouTube video player"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
           ></iframe>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-10 mt-8 lg:mx-32">
             <ul>
@@ -445,9 +465,8 @@ const LandingPage = () => {
               >
                 How Smart Contracts Can Be Automatically Verified
               </ResourceListItem>
-              {
-                showMoreReadResources ? (
-                  <>
+              {showMoreReadResources ? (
+                <>
                   <ResourceListItem
                     href="https://medium.com/remix-ide/verify-contracts-on-remix-with-sourcify-2912004d9c84"
                     date="26 Jun 2020"
@@ -461,22 +480,26 @@ const LandingPage = () => {
                     The future of a Decentralized Etherscan
                   </ResourceListItem>
                 </>
-                ) : (
-                  <button className="text-ceruleanBlue-500" onClick={() => setShowMoreReadResources(true)}>Show more</button>
-                )
-              }
-
+              ) : (
+                <button
+                  className="text-ceruleanBlue-500"
+                  onClick={() => setShowMoreReadResources(true)}
+                >
+                  Show more
+                </button>
+              )}
             </ul>
             <ul>
               <h3 className="text-ceruleanBlue-500 uppercase text-lg font-semibold">
                 📽 Watch
               </h3>
-              
+
               <ResourceListItem
                 href="https://www.youtube.com/watch?v=HOATnus4oL0"
                 date="10 Jun 2022"
               >
-                Franziska Heintel - Towards Trust-Minimized Transactions and a Transparent Web3
+                Franziska Heintel - Towards Trust-Minimized Transactions and a
+                Transparent Web3
               </ResourceListItem>
               <ResourceListItem
                 href="https://www.youtube.com/watch?v=z5D613Qt7Kc"
@@ -490,8 +513,7 @@ const LandingPage = () => {
               >
                 Goodbye YOLO-Signing
               </ResourceListItem>
-              {
-                showMoreWatchResources ? (
+              {showMoreWatchResources ? (
                 <>
                   <ResourceListItem
                     href="https://www.youtube.com/watch?v=Zc_fJElIooQ"
@@ -510,14 +532,18 @@ const LandingPage = () => {
                     href="https://www.youtube.com/watch?v=_73OrDbpxoY&list=PLrtFm7U0BIfUH7g1-blb-eYFgzOYWhvqm&index=13"
                     date="04 Mar 2020"
                   >
-                    Christian Reitwiessner: Improving Wallet UX and Security through
-                    a Decentralized Metadata and Source Code Repository
+                    Christian Reitwiessner: Improving Wallet UX and Security
+                    through a Decentralized Metadata and Source Code Repository
                   </ResourceListItem>
                 </>
-                ): (
-                  <button className="text-ceruleanBlue-500" onClick={() => setShowMoreWatchResources(true)}>Show more</button>
-                )
-              }
+              ) : (
+                <button
+                  className="text-ceruleanBlue-500"
+                  onClick={() => setShowMoreWatchResources(true)}
+                >
+                  Show more
+                </button>
+              )}
             </ul>
           </div>
         </div>
@@ -571,6 +597,7 @@ const LandingPage = () => {
               <FooterItem href="https://github.com/sourcifyeth">
                 GitHub (organization)
               </FooterItem>
+              <FooterItem href="mailto:hello@sourcify.dev">E-Mail</FooterItem>
             </ul>
           </div>
         </nav>

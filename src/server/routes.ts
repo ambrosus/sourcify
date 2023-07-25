@@ -1,27 +1,22 @@
 import { Router } from "express";
-import config from "../config";
-import { Logger, FileService } from "@ethereum-sourcify/core";
-import { VerificationService } from "@ethereum-sourcify/verification";
-import { ValidationService } from "@ethereum-sourcify/validation";
-import FileController from "./controllers/FileController";
-import VerificationController from "./controllers/VerificationController";
-import TestArtifactsController from "./controllers/TestArtifactsController";
+import testArtifactsRoutes from "./controllers/testartifacts/testartifacts.routes";
+import repositoryRoutes from "./controllers/repository/repository.routes";
+import sessionStateRoutes from "./controllers/verification/session-state/session-state.routes";
+import verifyRoutes from "./controllers/verification/verify/verify.routes";
+import solcJsonRoutes from "./controllers/verification/solc-json/solc-json.routes";
+import create2Routes from "./controllers/verification/create2/create2.routes";
+import etherscanRoutes from "./controllers/verification/etherscan/etherscan.routes";
 
 const router: Router = Router();
 
-const fileService = new FileService(config.repository.path);
-const validationService: ValidationService = new ValidationService(
-  Logger("ValidationService")
-);
-const verificationService = new VerificationService(fileService);
+router.use("/chain-tests", testArtifactsRoutes);
 
-const testArtifactsController = new TestArtifactsController();
-const fileController = new FileController(fileService);
-const verificationController: VerificationController =
-  new VerificationController(verificationService, validationService);
+router.use("/", repositoryRoutes);
 
-router.use("/chain-tests", testArtifactsController.registerRoutes());
-router.use("/files/", fileController.registerRoutes());
-router.use("/", verificationController.registerRoutes());
+router.use("/", sessionStateRoutes);
+router.use("/", verifyRoutes);
+router.use("/", solcJsonRoutes);
+router.use("/", create2Routes);
+router.use("/", etherscanRoutes);
 
 export default router;

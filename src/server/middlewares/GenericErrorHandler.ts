@@ -1,28 +1,26 @@
 import * as HttpStatus from "http-status-codes";
 import { Request, Response } from "express";
-import { Logger } from "@ethereum-sourcify/core";
-import * as bunyan from "bunyan";
+import { SourcifyEventManager } from "../../common/SourcifyEventManager/SourcifyEventManager";
 
 export default function genericErrorHandler(
   err: any,
   _req: Request,
   res: Response,
+  // Next function is required for Express to recognize this as an error handler. Error handlers must have 4 parameters.
   _next: any
 ): void {
-  if (err.log) {
-    const logger: bunyan = Logger("Error");
-    logger.error(`Error: ${JSON.stringify(err)}`);
-  }
+  const errorCode = +err.code || err.status || 500;
 
   if (err.errors) {
-    res.status(err.code).json({
+    // This is a validation error
+    res.status(errorCode).json({
       message: err.message,
       errors: err.errors,
     });
     return;
   }
-  const errorCode = +err.code || err.status || 500;
   res.status(errorCode).json({
-    error: err.message || HttpStatus.getStatusText(errorCode),
+    error: err.message || HttpStatus.getStatusText(errorCode), // Need to keep this for backward compatibility, but ideally we should respond with `message` only
+    message: err.message || HttpStatus.getStatusText(errorCode),
   });
 }

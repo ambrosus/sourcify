@@ -1,44 +1,71 @@
-const dagPB = require("ipld-dag-pb");
-const UnixFS = require("ipfs-unixfs");
-const multihashes = require("multihashes");
-const Web3 = require("web3");
-const utils = require("../../services/core/build/utils/utils");
+const { ContractFactory, Wallet, BaseContract } = require("ethers");
+const { etherscanAPIs } = require("../../dist/config");
+const { sourcifyChainsMap } = require("../../dist/sourcify-chains");
+const {
+  assertVerificationSession,
+  assertVerification,
+} = require("./assertions");
+const chai = require("chai");
+const chaiHttp = require("chai-http");
 
-/**
- *  Function to deploy contracts from provider unlocked accounts
- */
-async function deployFromAbiAndBytecode(web3, abi, bytecode, from, args) {
-  // Deploy contract
-  const contract = new web3.eth.Contract(abi);
-  const deployment = contract.deploy({
-    data: bytecode,
-    arguments: args || [],
-  });
-  const gas = await deployment.estimateGas({ from });
-  const contractResponse = await deployment.send({
-    from,
-    gas,
-  });
-  return contractResponse.options.address;
+chai.use(chaiHttp);
+
+const invalidAddress = "0x000000bCB92160f8B7E094998Af6BCaD7fa537ff"; // checksum false
+const unusedAddress = "0xf1Df8172F308e0D47D0E5f9521a5210467408535";
+const unsupportedChain = "3"; // Ropsten
+
+async function deployFromAbiAndBytecode(signer, abi, bytecode, args) {
+  const contractFactory = new ContractFactory(abi, bytecode, signer);
+  console.log(`Deploying contract ${args?.length ? `with args ${args}` : ""}`);
+  const deployment = await contractFactory.deploy(...(args || []));
+  await deployment.waitForDeployment();
+
+  const contractAddress = await deployment.getAddress();
+  console.log(`Deployed contract at ${contractAddress}`);
+  return contractAddress;
 }
 
+/**
+ * Creator tx hash is needed for tests. This function returns the tx hash in addition to the contract address.
+ *
+ */
+async function deployFromAbiAndBytecodeForCreatorTxHash(
+  signer,
+  abi,
+  bytecode,
+  args
+) {
+  const contractFactory = new ContractFactory(abi, bytecode, signer);
+  console.log(`Deploying contract ${args?.length ? `with args ${args}` : ""}`);
+  const deployment = await contractFactory.deploy(...(args || []));
+  await deployment.waitForDeployment();
+
+  const contractAddress = await deployment.getAddress();
+  const creationTx = deployment.deploymentTransaction();
+  if (!creationTx) {
+    throw new Error(`No deployment transaction found for ${contractAddress}`);
+  }
+  console.log(
+    `Deployed contract at ${contractAddress} with tx ${creationTx.hash}`
+  );
+
+  return { contractAddress, txHash: creationTx.hash };
+}
 /**
  * Function to deploy contracts from an external account with private key
  */
-async function deployFromPrivateKey(web3, abi, bytecode, privateKey, args) {
-  const contract = new web3.eth.Contract(abi);
-  const account = web3.eth.accounts.wallet.add(privateKey);
-  const deployment = contract.deploy({
-    data: bytecode,
-    arguments: args || [],
-  });
-  const gas = await deployment.estimateGas({ from: account.address });
-  const contractResponse = await deployment.send({
-    from: account.address,
-    gas,
-  });
-  return contractResponse.options.address;
+async function deployFromPrivateKey(provider, abi, bytecode, privateKey, args) {
+  const signer = new Wallet(privateKey, provider);
+  const contractFactory = new ContractFactory(abi, bytecode, signer);
+  console.log(`Deploying contract ${args?.length ? `with args ${args}` : ""}`);
+  const deployment = await contractFactory.deploy(...(args || []));
+  await deployment.waitForDeployment();
+
+  const contractAddress = await deployment.getAddress();
+  console.log(`Deployed contract at ${contractAddress}`);
+  return contractAddress;
 }
+
 /**
  * Await `secs` seconds
  * @param  {Number} secs seconds
@@ -48,55 +75,92 @@ function waitSecs(secs = 0) {
   return new Promise((resolve) => setTimeout(resolve, secs * 1000));
 }
 
-/**
- * Derives IPFS hash of string
- * @param  {String} str
- * @return {String}     IPFS hash (ex: "Qm")
- */
-async function getIPFSHash(str) {
-  const file = new UnixFS("file", Buffer.from(str));
-  const node = new dagPB.DAGNode(file.marshal());
-  const metadataLink = await node.toDAGLink();
-  return multihashes.toB58String(metadataLink._cid.multihash);
+// Uses staticCall which does not send a tx i.e. change the state.
+async function callContractMethod(
+  provider,
+  abi,
+  contractAddress,
+  methodName,
+  from,
+  args
+) {
+  const contract = new BaseContract(contractAddress, abi, provider);
+  const callResponse = await contract[methodName].staticCall(...args);
+
+  return callResponse;
 }
 
-/**
- * Extracts bzzr0 hash from a compiled artifact's deployed bytecode
- * @param  {Object} artifact artifact in ex: test/sources/pass
- * @return {String}          hash
- */
-function getBzzr0Hash(artifact) {
-  const bytes = Web3.utils.hexToBytes(
-    artifact.compilerOutput.evm.deployedBytecode.object
-  );
-  const data = utils.cborDecode(bytes);
-  const val = Web3.utils.bytesToHex(data.bzzr0).slice(2);
-
-  if (!val.length) throw "Artifact does not support bzzr0";
-  return val;
+// Sends a tx that changes the state
+async function callContractMethodWithTx(
+  signer,
+  abi,
+  contractAddress,
+  methodName,
+  args
+) {
+  const contract = new BaseContract(contractAddress, abi, signer);
+  const txResponse = await contract[methodName].send(...args);
+  const txReceipt = await txResponse.wait();
+  return txReceipt;
 }
 
-/**
- * Extracts bzzr1 hash from a compiled artifact's deployed bytecode
- * @param  {Object} artifact artifact in ex: test/sources/pass
- * @return {String}          hash
- */
-function getBzzr1Hash(artifact) {
-  const bytes = Web3.utils.hexToBytes(
-    artifact.compilerOutput.evm.deployedBytecode.object
-  );
-  const data = utils.cborDecode(bytes);
-  const val = Web3.utils.bytesToHex(data.bzzr1).slice(2);
+function verifyAndAssertEtherscan(
+  serverApp,
+  chainId,
+  address,
+  expectedStatus,
+  type
+) {
+  it(`Non-Session: Should import a ${type} contract from  #${chainId} ${sourcifyChainsMap[chainId].name} (${etherscanAPIs[chainId].apiURL}) and verify the contract, finding a ${expectedStatus} match`, (done) => {
+    let request = chai
+      .request(serverApp)
+      .post("/verify/etherscan")
+      .field("address", address)
+      .field("chain", chainId);
+    request.end((err, res) => {
+      // currentResponse = res;
+      assertVerification(err, res, done, address, chainId, expectedStatus);
+    });
+  });
+}
 
-  if (!val.length) throw "Artifact does not support bzzr1";
-  return val;
+function verifyAndAssertEtherscanSession(
+  serverApp,
+  chainId,
+  address,
+  expectedStatus,
+  type
+) {
+  it(`Session: Should import a ${type} contract from  #${chainId} ${sourcifyChainsMap[chainId].name} (${etherscanAPIs[chainId].apiURL}) and verify the contract, finding a ${expectedStatus} match`, (done) => {
+    chai
+      .request(serverApp)
+      .post("/session/verify/etherscan")
+      .field("address", address)
+      .field("chainId", chainId)
+      .end((err, res) => {
+        // currentResponse = res;
+        assertVerificationSession(
+          err,
+          res,
+          done,
+          address,
+          chainId,
+          expectedStatus
+        );
+      });
+  });
 }
 
 module.exports = {
   deployFromAbiAndBytecode,
+  deployFromAbiAndBytecodeForCreatorTxHash,
   deployFromPrivateKey,
   waitSecs,
-  getIPFSHash,
-  getBzzr0Hash,
-  getBzzr1Hash,
+  callContractMethod,
+  callContractMethodWithTx,
+  invalidAddress,
+  unsupportedChain,
+  unusedAddress,
+  verifyAndAssertEtherscan,
+  verifyAndAssertEtherscanSession,
 };
