@@ -7,5 +7,8 @@ COPY . .
 COPY configs/chains/* services/core/src/
 COPY configs/.env environments/.env
 
-RUN npm install -g lerna && \
-    lerna bootstrap
+RUN npm install -g lerna
+
+RUN lerna clean --yes && \
+    lerna bootstrap && \
+    lerna build
