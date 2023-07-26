@@ -4,7 +4,7 @@ WORKDIR /etc/sourcify
 
 COPY . .
 
-COPY configs/chains/* src/
+COPY configs/chains/* services/core/src/
 COPY configs/.env environments/.env
 
 RUN npm install
