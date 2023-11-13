@@ -3,7 +3,7 @@
 /**
  * Part of E2E Monitor test run for staging and master builds
  * Script queries the repository to discover whether a contract
- * published to Rinkeby in CI has been picked up and saved by the
+ * published to {chainID} in CI has been picked up and saved by the
  * monitor.
  */
 
@@ -20,7 +20,7 @@ if (!chainID || !chainName) {
   process.exit(1);
 }
 
-const artifact = require("../metacoin-source-verify/build/contracts/MetaCoin.json");
+const artifact = require("../metacoin-source-verify/MetaCoin.json");
 const address = artifact.networks[chainID].address;
 
 async function main() {

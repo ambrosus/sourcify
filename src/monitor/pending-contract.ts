@@ -1,9 +1,13 @@
-import { StringMap } from "@ethereum-sourcify/core";
 import SourceFetcher from "./source-fetcher";
 import { SourceAddress } from "./util";
-import Logger from "bunyan";
-import Web3 from "web3";
-import { CheckedContract, isEmpty } from "@ethereum-sourcify/core";
+import {
+  CheckedContract,
+  isEmpty,
+  Metadata,
+  StringMap,
+} from "@ethereum-sourcify/lib-sourcify";
+import { SourcifyEventManager } from "../common/SourcifyEventManager/SourcifyEventManager";
+import { id as keccak256str } from "ethers";
 
 type PendingSource = {
   keccak256: string;
@@ -14,15 +18,13 @@ type PendingSource = {
 interface PendingSourceMap {
   [keccak256: string]: PendingSource;
 }
-type Metadata = { sources: PendingSourceMap };
 
 export default class PendingContract {
-  private metadata: Metadata;
-  private pendingSources: PendingSourceMap;
+  private metadata: Metadata | undefined;
+  private pendingSources: PendingSourceMap = {};
   private fetchedSources: StringMap = {};
   private sourceFetcher: SourceFetcher;
   private callback: (contract: CheckedContract) => void;
-  private logger = new Logger({ name: "Pending Contract" });
 
   constructor(
     sourceFetcher: SourceFetcher,
@@ -42,23 +44,19 @@ export default class PendingContract {
   }
 
   private addMetadata = (rawMetadata: string) => {
-    this.metadata = JSON.parse(rawMetadata);
-    this.pendingSources = {};
-    const loc = "[PENDING_CONTRACT:ADD_METADATA]";
-
-    const count = Object.keys(this.metadata.sources).length;
-    this.logger.info({ loc, count }, "New pending files");
+    this.metadata = JSON.parse(rawMetadata) as Metadata;
 
     for (const name in this.metadata.sources) {
-      const source = this.metadata.sources[name];
+      const source = JSON.parse(JSON.stringify(this.metadata.sources[name]));
       source.name = name;
 
       if (source.content) {
         this.fetchedSources[name] = source.content;
         continue;
       } else if (!source.keccak256) {
-        const err = "The source provides neither content nor keccak256";
-        this.logger.error({ loc, name, err });
+        SourcifyEventManager.trigger("Monitor.Error", {
+          message: `Source ${name} has no keccak256 nor content`,
+        });
         break;
       }
       this.pendingSources[source.keccak256] = source;
@@ -67,10 +65,9 @@ export default class PendingContract {
       for (const url of source.urls) {
         const sourceAddress = SourceAddress.fromUrl(url);
         if (!sourceAddress) {
-          this.logger.error(
-            { loc, url, name },
-            "Could not determine source file location"
-          );
+          SourcifyEventManager.trigger("Monitor.Error", {
+            message: `Could not determine source file location for ${name} at ${url}`,
+          });
           continue;
         }
         sourceAddresses.push(sourceAddress);
@@ -92,7 +89,7 @@ export default class PendingContract {
   };
 
   private addFetchedSource = (sourceContent: string) => {
-    const hash = Web3.utils.keccak256(sourceContent);
+    const hash = keccak256str(sourceContent);
     const source = this.pendingSources[hash];
 
     if (!source || source.name in this.fetchedSources) {
@@ -102,7 +99,7 @@ export default class PendingContract {
     delete this.pendingSources[hash];
     this.fetchedSources[source.name] = sourceContent;
 
-    if (isEmpty(this.pendingSources)) {
+    if (isEmpty(this.pendingSources) && this.metadata) {
       const contract = new CheckedContract(this.metadata, this.fetchedSources);
       this.callback(contract);
     }

@@ -1,35 +1,30 @@
-import {
-  cborDecode,
-  getMonitoredChains,
-  getTestChains,
-  MonitorConfig,
-  CheckedContract,
-  FileService,
-  Chain,
-} from "@ethereum-sourcify/core";
-import {
-  VerificationService,
-  IVerificationService,
-} from "@ethereum-sourcify/verification";
-import Logger from "bunyan";
-import Web3 from "web3";
-import { Transaction } from "web3-core";
 import { SourceAddress } from "./util";
-import { ethers } from "ethers";
+import { TransactionResponse, getCreateAddress } from "ethers";
 import SourceFetcher from "./source-fetcher";
-import SystemConfig from "../config";
 import assert from "assert";
 import { EventEmitter } from "stream";
+import { decode as bytecodeDecode } from "@ethereum-sourcify/bytecode-utils";
+import { SourcifyEventManager } from "../common/SourcifyEventManager/SourcifyEventManager";
+import {
+  CheckedContract,
+  SourcifyChain,
+} from "@ethereum-sourcify/lib-sourcify";
+import { services } from "../server/services/services";
+import { IRepositoryService } from "../server/services/RepositoryService";
+import { IVerificationService } from "../server/services/VerificationService";
+import { monitoredChainArray } from "../sourcify-chains";
+import { logger } from "../common/loggerLoki";
+import "../common/SourcifyEventManager/listeners/logger";
 
-const BLOCK_PAUSE_FACTOR = parseInt(process.env.BLOCK_PAUSE_FACTOR) || 1.1;
+const BLOCK_PAUSE_FACTOR =
+  parseInt(process.env.BLOCK_PAUSE_FACTOR || "") || 1.1;
 assert(BLOCK_PAUSE_FACTOR > 1);
 const BLOCK_PAUSE_UPPER_LIMIT =
-  parseInt(process.env.BLOCK_PAUSE_UPPER_LIMIT) || 30 * 1000; // default: 30 seconds
+  parseInt(process.env.BLOCK_PAUSE_UPPER_LIMIT || "") || 30 * 1000; // default: 30 seconds
 const BLOCK_PAUSE_LOWER_LIMIT =
-  parseInt(process.env.BLOCK_PAUSE_LOWER_LIMIT) || 0.5 * 1000; // default: 0.5 seconds
-const WEB3_TIMEOUT = parseInt(process.env.WEB3_TIMEOUT) || 3000;
+  parseInt(process.env.BLOCK_PAUSE_LOWER_LIMIT || "") || 0.5 * 1000; // default: 0.5 seconds
 
-function createsContract(tx: Transaction): boolean {
+function createsContract(tx: TransactionResponse): boolean {
   return !tx.to;
 }
 
@@ -37,12 +32,10 @@ function createsContract(tx: Transaction): boolean {
  * A monitor that periodically checks for new contracts on a single chain.
  */
 class ChainMonitor extends EventEmitter {
-  private chainId: string;
-  private web3urls: string[];
-  private web3provider: Web3;
+  private sourcifyChain: SourcifyChain;
   private sourceFetcher: SourceFetcher;
-  private logger: Logger;
   private verificationService: IVerificationService;
+  private repositoryService: IRepositoryService;
   private running: boolean;
 
   private getBytecodeRetryPause: number;
@@ -50,70 +43,46 @@ class ChainMonitor extends EventEmitter {
   private initialGetBytecodeTries: number;
 
   constructor(
-    name: string,
-    chainId: string,
-    web3urls: string[],
+    sourcifyChain: SourcifyChain,
     sourceFetcher: SourceFetcher,
-    verificationService: IVerificationService
+    verificationService: IVerificationService,
+    repositoryService: IRepositoryService
   ) {
     super();
-    this.chainId = chainId;
-    this.web3urls = web3urls;
+    this.sourcifyChain = sourcifyChain;
     this.sourceFetcher = sourceFetcher;
-    this.logger = new Logger({ name });
     this.verificationService = verificationService;
+    this.repositoryService = repositoryService;
+    this.running = false;
 
     this.getBytecodeRetryPause =
-      parseInt(process.env.GET_BYTECODE_RETRY_PAUSE) || 5 * 1000;
-    this.getBlockPause = parseInt(process.env.GET_BLOCK_PAUSE) || 10 * 1000;
+      parseInt(process.env.GET_BYTECODE_RETRY_PAUSE || "") || 5 * 1000;
+    this.getBlockPause =
+      parseInt(process.env.GET_BLOCK_PAUSE || "") || 10 * 1000;
     this.initialGetBytecodeTries =
-      parseInt(process.env.INITIAL_GET_BYTECODE_TRIES) || 3;
+      parseInt(process.env.INITIAL_GET_BYTECODE_TRIES || "") || 3;
   }
 
   start = async (): Promise<void> => {
     this.running = true;
-    const rawStartBlock = process.env[`MONITOR_START_${this.chainId}`];
+    const rawStartBlock =
+      process.env[`MONITOR_START_${this.sourcifyChain.chainId}`];
 
-    // iterate over RPCs to find a working one; log the search result
-    let found = false;
-    for (const web3url of this.web3urls) {
-      this.logger.info(
-        { loc: "[MONITOR:START]", web3url },
-        "Attempting to connect"
-      );
-      const opts = { timeout: WEB3_TIMEOUT };
-      const web3provider = new Web3(
-        new Web3.providers.HttpProvider(web3url, opts)
-      );
-      try {
-        const lastBlockNumber = await web3provider.eth.getBlockNumber();
-        this.logger.info(
-          { loc: "[MONITOR:START]", lastBlockNumber },
-          "Found a working chain"
-        );
-        found = true;
+    try {
+      const lastBlockNumber = await this.sourcifyChain.getBlockNumber();
+      const startBlock =
+        rawStartBlock !== undefined ? parseInt(rawStartBlock) : lastBlockNumber;
 
-        this.web3provider = web3provider;
-
-        const startBlock =
-          rawStartBlock !== undefined
-            ? parseInt(rawStartBlock)
-            : lastBlockNumber;
-        this.processBlock(startBlock);
-        break;
-      } catch (err) {
-        this.logger.error({
-          loc: "[MONITOR:START]",
-          err: "Cannot getBlockNumber",
-          web3url,
-        });
-      }
-    }
-
-    if (!found) {
-      this.logger.error({
-        loc: "[MONITOR:START]",
-        err: "No working chains! Exiting!",
+      SourcifyEventManager.trigger("Monitor.Started", {
+        chainId: this.sourcifyChain.chainId.toString(),
+        lastBlockNumber,
+        startBlock,
+      });
+      this.processBlock(startBlock);
+    } catch (err) {
+      SourcifyEventManager.trigger("Monitor.Error.CantStart", {
+        chainId: this.sourcifyChain.chainId.toString(),
+        message: "Couldn't find a working RPC node.",
       });
     }
   };
@@ -122,47 +91,50 @@ class ChainMonitor extends EventEmitter {
    * Stops the monitor after executing all pending requests.
    */
   stop = (): void => {
-    this.logger.info(
-      { loc: "[MONITOR:STOP]" },
-      "Monitor will be stopped after pending calls finish."
+    SourcifyEventManager.trigger(
+      "Monitor.Stopped",
+      this.sourcifyChain.chainId.toString()
     );
     this.running = false;
   };
 
   private processBlock = (blockNumber: number) => {
-    this.web3provider.eth
+    this.sourcifyChain
       .getBlock(blockNumber, true)
       .then((block) => {
         if (!block) {
           this.adaptBlockPause("increase");
-
-          const logObject = {
-            loc: "[PROCESS_BLOCK]",
-            blockNumber,
-            getBlockPause: this.getBlockPause,
-          };
-          this.logger.info(logObject, "Waiting for new blocks");
           return;
         }
 
         this.adaptBlockPause("decrease");
 
-        for (const tx of block.transactions) {
+        SourcifyEventManager.trigger("Monitor.ProcessingBlock", {
+          blockNumber,
+          chainId: this.sourcifyChain.chainId.toString(),
+          getBlockPause: this.getBlockPause,
+        });
+
+        for (const tx of block.prefetchedTransactions) {
           if (createsContract(tx)) {
-            const address = ethers.utils.getContractAddress(tx);
+            const address = getCreateAddress(tx);
             if (this.isVerified(address)) {
-              this.logger.info(
-                { loc: "[PROCESS_ADDRESS:SKIP]", address },
-                "Already verified"
+              SourcifyEventManager.trigger("Monitor.AlreadyVerified", {
+                address,
+                chainId: this.sourcifyChain.chainId.toString(),
+              });
+              this.emit(
+                "contract-already-verified",
+                this.sourcifyChain.chainId,
+                address
               );
-              this.emit("contract-already-verified", this.chainId, address);
             } else {
-              this.logger.info(
-                { loc: "[PROCESS_ADDRESS]", address },
-                "New contract"
-              );
+              SourcifyEventManager.trigger("Monitor.NewContract", {
+                address,
+                chainId: this.sourcifyChain.chainId.toString(),
+              });
               this.processBytecode(
-                tx.input,
+                tx.hash,
                 address,
                 this.initialGetBytecodeTries
               );
@@ -173,10 +145,12 @@ class ChainMonitor extends EventEmitter {
         blockNumber++;
       })
       .catch((err) => {
-        this.logger.error(
-          { loc: "[PROCESS_BLOCK:FAILED]", blockNumber },
-          err.message
-        );
+        SourcifyEventManager.trigger("Monitor.Error.ProcessingBlock", {
+          message: err.message,
+          stack: err.stack,
+          chainId: this.sourcifyChain.chainId.toString(),
+          blockNumber,
+        });
       })
       .finally(() => {
         this.mySetTimeout(this.processBlock, this.getBlockPause, blockNumber);
@@ -184,9 +158,9 @@ class ChainMonitor extends EventEmitter {
   };
 
   private isVerified(address: string): boolean {
-    const foundArr = this.verificationService.findByAddress(
+    const foundArr = this.repositoryService.checkByChainAndAddress(
       address,
-      this.chainId
+      this.sourcifyChain.chainId.toString()
     );
     return !!foundArr.length;
   }
@@ -200,7 +174,7 @@ class ChainMonitor extends EventEmitter {
   };
 
   private processBytecode = (
-    creationData: string,
+    creatorTxHash: string,
     address: string,
     retriesLeft: number
   ): void => {
@@ -208,77 +182,82 @@ class ChainMonitor extends EventEmitter {
       return;
     }
 
-    this.web3provider.eth
-      .getCode(address)
+    this.sourcifyChain
+      .getBytecode(address)
       .then((bytecode) => {
         if (bytecode === "0x") {
-          this.logger.info(
-            { loc: "[PROCESS_BYTECODE]", address, retriesLeft },
-            "Empty bytecode"
-          );
           this.mySetTimeout(
             this.processBytecode,
             this.getBytecodeRetryPause,
-            creationData,
+            creatorTxHash,
             address,
             retriesLeft
           );
           return;
         }
 
-        const numericBytecode = Web3.utils.hexToBytes(bytecode);
         try {
-          const cborData = cborDecode(numericBytecode);
+          const cborData = bytecodeDecode(bytecode);
           const metadataAddress = SourceAddress.fromCborData(cborData);
-          this.sourceFetcher.assemble(metadataAddress, (contract) =>
-            this.inject(contract, bytecode, creationData, address)
+          this.sourceFetcher.assemble(
+            metadataAddress,
+            (contract: CheckedContract) => {
+              this.verifyAndStore(contract, address, creatorTxHash);
+            }
           );
         } catch (err: any) {
-          this.logger.error(
-            { loc: "[GET_BYTECODE:METADATA_READING]", address },
-            err.message
-          );
+          SourcifyEventManager.trigger("Monitor.Error.ProcessingBytecode", {
+            message: err.message,
+            stack: err.stack,
+            chainId: this.sourcifyChain.chainId.toString(),
+            address,
+          });
         }
       })
       .catch((err) => {
-        this.logger.error(
-          { loc: "[GET_BYTECODE]", address, retriesLeft },
-          err.message
-        );
+        SourcifyEventManager.trigger("Monitor.Error.GettingBytecode", {
+          message: err.message,
+          stack: err.stack,
+          chainId: this.sourcifyChain.chainId.toString(),
+          address,
+        });
         this.mySetTimeout(
           this.processBytecode,
           this.getBytecodeRetryPause,
-          creationData,
+          creatorTxHash,
           address,
           retriesLeft
         );
       });
   };
 
-  private inject = (
+  private verifyAndStore = async (
     contract: CheckedContract,
-    bytecode: string,
-    creationData: string,
-    address: string
+    address: string,
+    creatorTxHash: string
   ) => {
-    const logObject = {
-      loc: "[MONITOR:INJECT]",
-      contract: contract.name,
-      address,
-    };
-    this.verificationService
-      .inject({
+    try {
+      const match = await this.verificationService.verifyDeployed(
         contract,
-        bytecode,
-        creationData,
-        chain: this.chainId,
-        addresses: [address],
-      })
-      .then(() => {
-        this.logger.info(logObject, "Successfully injected");
-        this.emit("contract-verified-successfully", this.chainId, address);
-      })
-      .catch((err) => this.logger.error(logObject, err.message));
+        this.sourcifyChain.chainId.toString(),
+        address,
+        /* undefined, */
+        creatorTxHash
+      );
+      await this.repositoryService.storeMatch(contract, match);
+      this.emit(
+        "contract-verified-successfully",
+        this.sourcifyChain.chainId,
+        address
+      );
+    } catch (err: any) {
+      SourcifyEventManager.trigger("Monitor.Error.VerifyError", {
+        message: err.message,
+        stack: err.stack,
+        chainId: this.sourcifyChain.chainId.toString(),
+        address,
+      });
+    }
   };
 
   private mySetTimeout = (
@@ -299,22 +278,18 @@ export default class Monitor extends EventEmitter {
   private chainMonitors: ChainMonitor[];
   private sourceFetcher = new SourceFetcher();
 
-  constructor(config: MonitorConfig = {}) {
+  constructor(chainsToMonitor?: SourcifyChain[]) {
     super();
-    const repositoryPath = config.repository || SystemConfig.repository.path;
-
-    const chains = config.testing ? getTestChains() : getMonitoredChains();
-    this.chainMonitors = chains.map(
-      (chain: Chain) =>
+    chainsToMonitor = chainsToMonitor?.length
+      ? chainsToMonitor
+      : monitoredChainArray; // default to all monitored chains
+    this.chainMonitors = chainsToMonitor.map(
+      (sourcifyChain) =>
         new ChainMonitor(
-          chain.name,
-          chain.chainId.toString(),
-          chain.rpc,
+          sourcifyChain,
           this.sourceFetcher,
-          new VerificationService(
-            new FileService(repositoryPath),
-            new Logger({ name: "Monitor" })
-          )
+          services.verification,
+          services.repository
         )
     );
     this.chainMonitors.forEach((cm) => {

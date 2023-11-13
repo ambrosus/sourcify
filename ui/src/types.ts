@@ -1,3 +1,4 @@
+import { ParamType } from "@ethersproject/abi";
 export declare interface StringMap {
   [key: string]: string;
 }
@@ -49,27 +50,44 @@ export type ContractMeta = {
   storageTimestamp?: Date;
 };
 
-// contracts in the server response
 export type SendableContract = ContractMeta & {
   files: {
     found: string[];
     missing: MissingSources;
     invalid: InvalidSources;
   };
-  verificationId?: string;
+  verificationId: string;
+  constructorArgumentsArray?: [ParamType];
+  creationBytecode?: string;
 };
 
 export type VerificationInput = {
   verificationId: string;
   chainId: string;
   address: string;
+  /* contextVariables: {
+    abiEncodedConstructorArguments?: string;
+    msgSender?: string;
+  }; */
+  creatorTxHash?: string;
 };
+
+export type Create2VerificationInput = {
+  verificationId: string;
+  deployerAddress: string;
+  salt: string;
+  abiEncodedConstructorArguments: string;
+  create2Address: string;
+  clientToken: string;
+};
+
 export interface Match {
   address: string | null;
+  chainId: string | null;
   status: Status;
   storageTimestamp?: Date;
   message?: string;
-  encodedConstructorArgs?: string;
+  abiEncodedConstructorArguments?: string;
   libraryMap?: StringMap;
 }
 
@@ -80,6 +98,11 @@ export type CheckAllByAddressResult = {
     chainId: string;
     status: string;
   }[];
+  create2Args?: {
+    deployerAddress?: string | undefined;
+    salt?: string | undefined;
+    constructorArgs?: any[] | undefined;
+  };
 };
 
 export type Chain = {
@@ -91,6 +114,7 @@ export type Chain = {
   networkId: number;
   supported?: boolean;
   monitored?: boolean;
+  etherscanAPI?: string;
 };
 
 export type ChainMap = {
