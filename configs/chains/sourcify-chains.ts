@@ -941,7 +941,7 @@ const sourcifyChainsExtensions: SourcifyChainsExtensionsObject = {
     "22040": { // Ambrosus Testnet
         supported: true,
         monitored: false,
-        contractFetchAddress: undefined
+        contractFetchAddress: "testsourcify"
     },
 };
 
