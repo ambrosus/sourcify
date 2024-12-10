@@ -939,8 +939,9 @@ const sourcifyChainsExtensions: SourcifyChainsExtensionsObject = {
         "monitored": false,
     },
     "22040": { // Ambrosus Testnet
-        "supported": true,
-        "monitored": false,
+        supported: true,
+        monitored: false,
+        contractFetchAddress: null
     },
 };
 
